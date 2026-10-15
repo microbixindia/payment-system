@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package datavendor.ledger.v1;
+
+option go_package = "datavendor-payment-core/proto/ledger/v1;ledgerv1";
+
+import "google/protobuf/timestamp.proto";
+
+// CoreLedgerService defines high-throughput gRPC financial ledger APIs.
+service CoreLedgerService {
+  rpc CreateLedger (CreateLedgerRequest) returns (LedgerResponse);
+  rpc CreateAccount (CreateAccountRequest) returns (AccountResponse);
+  rpc GetAccountBalance (GetBalanceRequest) returns (BalanceResponse);
+  rpc PostJournalEntry (PostJournalEntryRequest) returns (JournalEntryResponse);
+  rpc StreamLedgerPostings (StreamPostingsRequest) returns (stream PostingMessage);
+}
+
+enum AccountType {
+  ACCOUNT_TYPE_UNSPECIFIED = 0;
+  ACCOUNT_TYPE_ASSET = 1;
+  ACCOUNT_TYPE_LIABILITY = 2;
+  ACCOUNT_TYPE_EQUITY = 3;
+  ACCOUNT_TYPE_REVENUE = 4;
+  ACCOUNT_TYPE_EXPENSE = 5;
+}
+
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  DIRECTION_DEBIT = 1;
+  DIRECTION_CREDIT = 2;
+}
+
+message CreateLedgerRequest {
+  string name = 1;
+  string base_currency = 2; // ISO 4217 (USD, EUR, GBP)
+  string description = 3;
+}
+
+message LedgerResponse {
+  string id = 1;
+  string name = 2;
+  string base_currency = 3;
+  string status = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message CreateAccountRequest {
+  string ledger_id = 1;
+  string code = 2;
+  string name = 3;
+  AccountType account_type = 4;
+  Direction normal_balance = 5;
+  string currency = 6;
+}
+
+message AccountResponse {
+  string id = 1;
+  string ledger_id = 2;
+  string code = 3;
+  string name = 4;
+  AccountType account_type = 5;
+  string currency = 6;
+  string current_balance = 7; // Fixed-point NUMERIC(38,4) decimal string
+  string status = 8;
+  int64 version = 9;
+}
+
+message GetBalanceRequest {
+  string account_id = 1;
+}
+
+message BalanceResponse {
+  string account_id = 1;
+  string currency = 2;
+  string balance = 3;
+  int64 version = 4;
+}
+
+message PostingLine {
+  string account_id = 1;
+  Direction direction = 2;
+  string amount = 3; // String representation to ensure exact precision
+  string description = 4;
+}
+
+message PostJournalEntryRequest {
+  string ledger_id = 1;
+  string idempotency_key = 2;
+  string correlation_id = 3;
+  string external_ref = 4;
+  string description = 5;
+  string currency = 6;
+  repeated PostingLine postings = 7;
+}
+
+message JournalEntryResponse {
+  string id = 1;
+  string ledger_id = 2;
+  string idempotency_hash = 3;
+  string state = 4;
+  string total_amount = 5;
+  string currency = 6;
+  google.protobuf.Timestamp posted_at = 7;
+}
+
+message StreamPostingsRequest {
+  string ledger_id = 1;
+  string account_id = 2;
+}
+
+message PostingMessage {
+  string id = 1;
+  string journal_entry_id = 2;
+  string account_id = 3;
+  Direction direction = 4;
+  string amount = 5;
+  string post_balance = 6;
+  google.protobuf.Timestamp created_at = 7;
+}

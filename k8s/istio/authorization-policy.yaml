@@ -1,0 +1,27 @@
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: ledger-engine-access-control
+  namespace: payment-system
+spec:
+  selector:
+    matchLabels:
+      app: core-ledger-engine
+  action: ALLOW
+  rules:
+  # Allow Edge API Gateway to call the Ledger Engine over mTLS with explicit principal
+  - from:
+    - source:
+        principals: ["cluster.local/ns/payment-system/sa/edge-api-gateway-sa"]
+    to:
+    - operation:
+        methods: ["POST", "GET"]
+        paths: ["/api/v1/ledger/*"]
+  # Allow Metered Billing Service to post invoices
+  - from:
+    - source:
+        principals: ["cluster.local/ns/payment-system/sa/b2b-metered-billing-sa"]
+    to:
+    - operation:
+        methods: ["POST"]
+        paths: ["/api/v1/ledger/postings"]

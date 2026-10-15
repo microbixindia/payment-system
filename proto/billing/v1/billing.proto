@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package datavendor.billing.v1;
+
+option go_package = "datavendor-payment-core/proto/billing/v1;billingv1";
+
+import "google/protobuf/timestamp.proto";
+
+// MeteredBillingService tracks telemetry events, manages quotas, and generates automated invoices.
+service MeteredBillingService {
+  rpc IngestTelemetryStream (stream TelemetryEvent) returns (TelemetryIngestSummary);
+  rpc QueryTenantUsage (TenantUsageQuery) returns (TenantUsageResponse);
+  rpc GenerateMonthlyInvoice (GenerateInvoiceRequest) returns (InvoiceResponse);
+}
+
+message TelemetryEvent {
+  string event_id = 1;
+  string tenant_id = 2;
+  string dataset_id = 3;
+  int64 bytes_transferred = 4;
+  int64 query_count = 5;
+  int64 compute_ms = 6;
+  google.protobuf.Timestamp timestamp = 7;
+  string idempotency_key = 8;
+  string signature = 9;
+}
+
+message TelemetryIngestSummary {
+  int64 total_events_accepted = 1;
+  int64 total_bytes_accumulated = 2;
+  string status = 3;
+}
+
+message TenantUsageQuery {
+  string tenant_id = 1;
+  string dataset_id = 2; // optional, empty for all
+  google.protobuf.Timestamp start_time = 3;
+  google.protobuf.Timestamp end_time = 4;
+}
+
+message TenantUsageResponse {
+  string tenant_id = 1;
+  int64 total_bytes = 2;
+  int64 total_queries = 3;
+  int64 total_compute_ms = 4;
+  string estimated_cost_usd = 5;
+  string quota_status = 6; // "NORMAL", "WARNING", "CRITICAL", "EXCEEDED"
+}
+
+message GenerateInvoiceRequest {
+  string tenant_id = 1;
+  string billing_period = 2; // "YYYY-MM"
+  string tax_rate = 3; // e.g. "0.0825"
+}
+
+message InvoiceResponse {
+  string invoice_id = 1;
+  string invoice_number = 2;
+  string subtotal = 3;
+  string tax_amount = 4;
+  string total_amount_due = 5;
+  string status = 6;
+  google.protobuf.Timestamp due_date = 7;
+}

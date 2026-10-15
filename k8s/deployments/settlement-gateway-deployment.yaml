@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: settlement-gateway
+  namespace: payment-system
+  labels:
+    app: settlement-gateway
+    tier: financial-rail
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: settlement-gateway
+  template:
+    metadata:
+      labels:
+        app: settlement-gateway
+      annotations:
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: settlement-gateway-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+      - name: settlement-gateway
+        image: datavendor.ecr.us-east-1.amazonaws.com/settlement-gateway:v1.0.0
+        securityContext:
+          readOnlyRootFilesystem: true
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+          limits:
+            cpu: "4000m"
+            memory: "8Gi"
+        ports:
+        - containerPort: 8083
+          name: http-api
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8083
+          initialDelaySeconds: 10
+          periodSeconds: 5

@@ -1,0 +1,21 @@
+{{- range $key, $service := .Values.services }}
+{{- if $service.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $service.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.serviceLabels" (list $ $service.name) | nindent 4 }}
+spec:
+  type: {{ $service.service.type | default "ClusterIP" }}
+  ports:
+    - port: {{ $service.service.port }}
+      targetPort: {{ $service.service.targetPort | default $service.service.port }}
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "datavendor-payment-core.selectorLabels" (list $ $service.name) | nindent 4 }}
+{{- end }}
+{{- end }}

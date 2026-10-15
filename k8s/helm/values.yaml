@@ -1,0 +1,421 @@
+# ==============================================================================
+# DATAVENDOR PAYMENT CORE - PRODUCTION HELM VALUES
+# Zero-Trust Architecture, PCI-DSS v4.0 & SOC 2 Type II Compliant
+# ==============================================================================
+
+global:
+  environment: "production"
+  region: "us-east-1"
+  clusterDomain: "cluster.local"
+  imageRegistry: "602401143452.dkr.ecr.us-east-1.amazonaws.com/datavendor"
+  imagePullPolicy: "IfNotPresent"
+  imagePullSecrets: []
+
+  # Enterprise Istio Service Mesh
+  istio:
+    enabled: true
+    sidecarInjection: true
+    mtlsMode: "STRICT"
+    holdApplicationUntilProxyStarts: true
+    proxyCPURequest: "100m"
+    proxyMemoryRequest: "128Mi"
+    proxyCPULimit: "1000m"
+    proxyMemoryLimit: "512Mi"
+
+  # Common Pod Security Context (Restricted Pod Security Standard)
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    runAsGroup: 10001
+    fsGroup: 10001
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Container Security Context
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  # Scheduling & High Availability
+  nodeSelector:
+    tier: "payment-core"
+
+  tolerations: []
+
+  # Cross-AZ High Availability Spread
+  topologySpreadConstraints:
+    enabled: true
+    maxSkew: 1
+    topologyKey: "topology.kubernetes.io/zone"
+    whenUnsatisfiable: "DoNotSchedule"
+
+# ==============================================================================
+# MICROSERVICES SPECIFICATIONS
+# ==============================================================================
+services:
+  # ----------------------------------------------------------------------------
+  # 1. Edge API Gateway (Public-facing TLS 1.3 Termination, Auth, Rate Limiting)
+  # ----------------------------------------------------------------------------
+  edgeApiGateway:
+    enabled: true
+    name: "edge-api-gateway"
+    replicaCount: 4
+    image:
+      repository: "edge-api-gateway"
+      tag: "v1.0.0"
+      pullPolicy: "IfNotPresent"
+    service:
+      type: ClusterIP
+      port: 8080
+      targetPort: 8080
+    env:
+      PORT: "8080"
+      ENVIRONMENT: "production"
+      LOG_LEVEL: "INFO"
+      LEDGER_SERVICE_URL: "http://core-ledger-engine:8080"
+      SETTLEMENT_SERVICE_URL: "http://settlement-gateway:8080"
+      BILLING_SERVICE_URL: "http://b2b-metered-billing:8082"
+    probes:
+      liveness:
+        path: "/healthz"
+        port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      readiness:
+        path: "/readyz"
+        port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 2
+        successThreshold: 1
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 4
+      maxReplicas: 30
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 4
+              periodSeconds: 15
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 10
+              periodSeconds: 60
+    pdb:
+      enabled: true
+      minAvailable: 2
+    serviceAccount:
+      create: true
+      name: "edge-api-gateway-sa"
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::602401143452:role/datavendor-edge-api-gateway-role"
+
+  # ----------------------------------------------------------------------------
+  # 2. Core Ledger Engine (Double-Entry Ledger, SHA-256 Merkle Audit Tree)
+  # ----------------------------------------------------------------------------
+  coreLedgerEngine:
+    enabled: true
+    name: "core-ledger-engine"
+    replicaCount: 6
+    image:
+      repository: "core-ledger-engine"
+      tag: "v1.0.0"
+      pullPolicy: "IfNotPresent"
+    service:
+      type: ClusterIP
+      port: 8080
+      targetPort: 8080
+    env:
+      PORT: "8080"
+      ENVIRONMENT: "production"
+      LOG_LEVEL: "INFO"
+      DB_HOST: "cockroachdb-public.cockroachdb.svc.cluster.local"
+      DB_PORT: "26257"
+      DB_NAME: "datavendor_ledger_prod"
+      DB_USER: "ledger_engine_svc"
+      DB_SSLMODE: "verify-full"
+      KAFKA_BROKERS: "datavendor-msk-b1.internal:9094,datavendor-msk-b2.internal:9094,datavendor-msk-b3.internal:9094"
+      KAFKA_SECURITY_PROTOCOL: "SASL_SSL"
+    probes:
+      liveness:
+        path: "/healthz"
+        port: 8080
+        initialDelaySeconds: 15
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      readiness:
+        path: "/healthz"
+        port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 5
+        timeoutSeconds: 2
+        successThreshold: 1
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: "2000m"
+        memory: "4Gi"
+      limits:
+        cpu: "8000m"
+        memory: "16Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 6
+      maxReplicas: 36
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 6
+              periodSeconds: 15
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 10
+              periodSeconds: 60
+    pdb:
+      enabled: true
+      minAvailable: 4
+    serviceAccount:
+      create: true
+      name: "core-ledger-engine-sa"
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::602401143452:role/datavendor-core-ledger-engine-role"
+
+  # ----------------------------------------------------------------------------
+  # 3. Settlement Gateway (SWIFT ISO 20022 / FedNow / ACH NACHA Pipelines)
+  # ----------------------------------------------------------------------------
+  settlementGateway:
+    enabled: true
+    name: "settlement-gateway"
+    replicaCount: 3
+    image:
+      repository: "settlement-gateway"
+      tag: "v1.0.0"
+      pullPolicy: "IfNotPresent"
+    service:
+      type: ClusterIP
+      port: 8080
+      targetPort: 8080
+    env:
+      PORT: "8080"
+      ENVIRONMENT: "production"
+      LOG_LEVEL: "INFO"
+      LEDGER_SERVICE_URL: "http://core-ledger-engine:8080"
+      KAFKA_BROKERS: "datavendor-msk-b1.internal:9094,datavendor-msk-b2.internal:9094"
+      SWIFT_NETWORK_ENDPOINT: "swift-gateway.partner.network:8443"
+      FEDNOW_NETWORK_ENDPOINT: "fednow-clearing.frb.org:443"
+    probes:
+      liveness:
+        path: "/healthz"
+        port: 8080
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      readiness:
+        path: "/healthz"
+        port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 2
+        successThreshold: 1
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 18
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 3
+              periodSeconds: 15
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 10
+              periodSeconds: 60
+    pdb:
+      enabled: true
+      minAvailable: 2
+    serviceAccount:
+      create: true
+      name: "settlement-gateway-sa"
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::602401143452:role/datavendor-settlement-gateway-role"
+
+  # ----------------------------------------------------------------------------
+  # 4. B2B Metered Billing (Kafka Event Ingestion, Quota Enforcement, Invoicing)
+  # ----------------------------------------------------------------------------
+  b2bMeteredBilling:
+    enabled: true
+    name: "b2b-metered-billing"
+    replicaCount: 3
+    image:
+      repository: "b2b-metered-billing"
+      tag: "v1.0.0"
+      pullPolicy: "IfNotPresent"
+    service:
+      type: ClusterIP
+      port: 8082
+      targetPort: 8082
+    env:
+      PORT: "8082"
+      ENVIRONMENT: "production"
+      LOG_LEVEL: "INFO"
+      KAFKA_BROKERS: "datavendor-msk-b1.internal:9094,datavendor-msk-b2.internal:9094"
+      KAFKA_CONSUMER_GROUP: "b2b-metered-billing-group"
+      DB_HOST: "cockroachdb-public.cockroachdb.svc.cluster.local"
+      DB_PORT: "26257"
+      DB_NAME: "datavendor_ledger_prod"
+    probes:
+      liveness:
+        path: "/healthz"
+        port: 8082
+        initialDelaySeconds: 10
+        periodSeconds: 10
+        timeoutSeconds: 3
+        failureThreshold: 3
+      readiness:
+        path: "/healthz"
+        port: 8082
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 2
+        successThreshold: 1
+        failureThreshold: 3
+    resources:
+      requests:
+        cpu: "1000m"
+        memory: "2Gi"
+      limits:
+        cpu: "4000m"
+        memory: "8Gi"
+    autoscaling:
+      enabled: true
+      minReplicas: 3
+      maxReplicas: 20
+      targetCPUUtilizationPercentage: 70
+      targetMemoryUtilizationPercentage: 80
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 3
+              periodSeconds: 15
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 10
+              periodSeconds: 60
+    pdb:
+      enabled: true
+      minAvailable: 2
+    serviceAccount:
+      create: true
+      name: "b2b-metered-billing-sa"
+      annotations:
+        eks.amazonaws.com/role-arn: "arn:aws:iam::602401143452:role/datavendor-b2b-metered-billing-role"
+
+# ==============================================================================
+# ZERO-TRUST NETWORK SECURITY ARCHITECTURE
+# Default-Deny, Microsegmentation, Database Tier Isolation
+# ==============================================================================
+networkPolicies:
+  enabled: true
+  defaultDenyAll: true
+
+  # DNS Port for CoreDNS resolution
+  dnsPort: 53
+
+  # Ingress Gateway Namespace & Labels (Public Ingress point)
+  ingressController:
+    namespace: "istio-ingress"
+    podSelector:
+      app: "istio-ingressgateway"
+
+  # Database Isolation Tier (CockroachDB Dedicated)
+  databaseTier:
+    enabled: true
+    port: 26257
+    namespace: "cockroachdb"
+    podSelector:
+      app.kubernetes.io/name: "cockroachdb"
+    # Authorized microservices with DB access (Edge Gateway is strictly excluded)
+    allowedComponents:
+      - "core-ledger-engine"
+      - "b2b-metered-billing"
+
+  # Event Streaming Isolation Tier (Apache Kafka / AWS MSK)
+  kafkaTier:
+    enabled: true
+    port: 9094
+    namespace: "kafka-telemetry"
+    podSelector:
+      app.kubernetes.io/name: "kafka"
+    # Authorized microservices with Kafka access (Edge Gateway is strictly excluded)
+    allowedComponents:
+      - "core-ledger-engine"
+      - "settlement-gateway"
+      - "b2b-metered-billing"
+
+  # Secure VPC Egress CIDRs (Private Subnets only)
+  vpcEgressCIDR: "10.0.0.0/16"
+
+  # External Banking / Clearing Settlement Gateways (Egress allowed for settlement gateway only)
+  settlementEgressCIDRs:
+    - "0.0.0.0/0" # Restricted via egress network policy to ports 443 & 8443

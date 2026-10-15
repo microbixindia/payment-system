@@ -1,0 +1,231 @@
+openapi: 3.1.0
+info:
+  title: DataVendor Payment Core Gateway API
+  description: >
+    Enterprise-Grade B2B Payment Gateway and High-Throughput Metered Billing Platform
+    for Large-Scale Dataset Sales. Fully encrypted with 256-bit AES-GCM and strict TLS 1.3.
+  version: 1.0.0
+  contact:
+    name: DataVendor Enterprise Security & Core Banking Hive
+    email: secops@datavendor.internal
+servers:
+  - url: https://gateway.datavendor.internal
+    description: Production Multi-Region Mesh Gateway
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness Probe
+      description: Returns service liveness status for Kubernetes orchestration.
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "UP"
+
+  /readyz:
+    get:
+      summary: Readiness Probe
+      description: Returns readiness status for service traffic routing.
+      responses:
+        '200':
+          description: Service dependencies connected.
+
+  /api/v1/ledger/postings:
+    post:
+      summary: Post Double-Entry Journal Entry
+      description: >
+        Atomically records balanced double-entry transactions in CockroachDB.
+        Guarantees Dijkstra resource ordering to prevent deadlocks and enforces
+        SHA-256 structural idempotency to eliminate duplicate settlement calls.
+      security:
+        - BearerAuth: ["ledger:write"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JournalEntryRequest'
+      responses:
+        '201':
+          description: Journal entry successfully committed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JournalEntryResponse'
+        '400':
+          description: Double-entry invariant violation (Debits != Credits).
+        '401':
+          description: Unauthorized token.
+        '409':
+          description: Duplicate idempotency hash.
+
+  /api/v1/settlement/execute:
+    post:
+      summary: Execute Banking Settlement
+      description: >
+        Routes transactions across Federal Reserve FedNow instant rails (USD <= $500k),
+        SWIFT ISO 20022 (pacs.008 cross-border/multi-currency), or NACHA ACH batch files.
+      security:
+        - BearerAuth: ["settlement:execute"]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettlementRequest'
+      responses:
+        '200':
+          description: Settlement instruction cleared or dispatched.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettlementResponse'
+
+  /api/v1/billing/usage:
+    get:
+      summary: Query Metered Dataset Consumption
+      description: Retrieves measured bytes transferred and quota status for a tenant.
+      security:
+        - BearerAuth: ["billing:read"]
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Telemetry aggregate retrieved.
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    MutualTLS:
+      type: mutualTLS
+
+  schemas:
+    JournalEntryRequest:
+      type: object
+      required:
+        - ledger_id
+        - idempotency_key
+        - currency
+        - postings
+      properties:
+        ledger_id:
+          type: string
+          format: uuid
+        idempotency_key:
+          type: string
+        correlation_id:
+          type: string
+        external_ref:
+          type: string
+        description:
+          type: string
+        currency:
+          type: string
+          example: "USD"
+        postings:
+          type: array
+          minItems: 2
+          items:
+            $ref: '#/components/schemas/PostingRequest'
+
+    PostingRequest:
+      type: object
+      required:
+        - account_id
+        - direction
+        - amount
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        direction:
+          type: string
+          enum: ["DEBIT", "CREDIT"]
+        amount:
+          type: string
+          description: Exact NUMERIC(38,4) decimal representation
+          example: "12500.5000"
+        description:
+          type: string
+
+    JournalEntryResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        idempotency_hash:
+          type: string
+        state:
+          type: string
+          example: "POSTED"
+        total_amount:
+          type: string
+          example: "12500.5000"
+        currency:
+          type: string
+          example: "USD"
+
+    SettlementRequest:
+      type: object
+      required:
+        - amount
+        - currency
+        - urgency
+        - debtor_account
+        - creditor_account
+      properties:
+        amount:
+          type: string
+          example: "850000.00"
+        currency:
+          type: string
+          example: "USD"
+        urgency:
+          type: string
+          enum: ["INSTANT", "SAME_DAY", "STANDARD"]
+        debtor_name:
+          type: string
+        debtor_account:
+          type: string
+        debtor_routing:
+          type: string
+        creditor_name:
+          type: string
+        creditor_account:
+          type: string
+        creditor_routing:
+          type: string
+        memo:
+          type: string
+
+    SettlementResponse:
+      type: object
+      properties:
+        instruction_id:
+          type: string
+          format: uuid
+        selected_rail:
+          type: string
+          example: "SWIFT_ISO20022"
+        payload_format:
+          type: string
+          example: "XML"
+        status:
+          type: string
+          example: "DISPATCHED"

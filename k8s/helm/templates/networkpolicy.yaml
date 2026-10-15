@@ -1,0 +1,417 @@
+{{- if .Values.networkPolicies.enabled }}
+# ==============================================================================
+# ZERO-TRUST KUBERNETES NETWORK POLICIES
+# PCI-DSS v4.0 Requirement 1 (Network Security Controls) & Strict Microsegmentation
+# ==============================================================================
+
+---
+# 1. Namespace-Wide Default Deny (All Ingress and All Egress)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-default-deny-all
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.labels" . | nindent 4 }}
+    security.datavendor.com/policy-tier: "zero-trust-baseline"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# 2. Allow Essential DNS Resolution (CoreDNS in kube-system)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-allow-dns
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.labels" . | nindent 4 }}
+    security.datavendor.com/policy-tier: "platform-dns"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: {{ .Values.networkPolicies.dnsPort | default 53 }}
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.dnsPort | default 53 }}
+
+---
+# 3. Allow Istio Control Plane (istiod) for Sidecar Proxy Synchronization
+{{- if .Values.global.istio.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-allow-istiod
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.labels" . | nindent 4 }}
+    security.datavendor.com/policy-tier: "service-mesh-control-plane"
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+    - Ingress
+  ingress:
+    # Allow Istio health/liveness probes to proxy endpoints
+    - ports:
+        - protocol: TCP
+          port: 15021 # envoy health check
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - protocol: TCP
+          port: 15012 # xDS mTLS
+        - protocol: TCP
+          port: 15014 # control plane telemetry
+{{- end }}
+
+---
+# 4. Edge API Gateway NetworkPolicy
+# Only component receiving ingress from Istio Ingress Gateway.
+# Strictly denied from direct database (CockroachDB:26257) or Kafka (9094) access.
+{{- if .Values.services.edgeApiGateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-edge-api-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.serviceLabels" (list . "edge-api-gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "datavendor-payment-core.selectorLabels" (list . "edge-api-gateway") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Ingress from Public Edge Ingress Gateway (Istio Ingress Gateway)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.ingressController.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicies.ingressController.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.edgeApiGateway.service.port }}
+  egress:
+    # Egress to Core Ledger Engine
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "core-ledger-engine") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.coreLedgerEngine.service.port }}
+    # Egress to Settlement Gateway
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "settlement-gateway") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.settlementGateway.service.port }}
+    # Egress to B2B Metered Billing
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "b2b-metered-billing") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.b2bMeteredBilling.service.port }}
+{{- end }}
+
+---
+# 5. Core Ledger Engine NetworkPolicy
+# Tier-0 Isolated Database Ingestion & Financial State Engine
+# Zero ingress from outside the mesh. Only accessed by edge-gateway & settlement-gateway.
+{{- if .Values.services.coreLedgerEngine.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-core-ledger-engine
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.serviceLabels" (list . "core-ledger-engine") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "datavendor-payment-core.selectorLabels" (list . "core-ledger-engine") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allowed strictly from edge gateway & settlement gateway
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "edge-api-gateway") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "settlement-gateway") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.coreLedgerEngine.service.port }}
+  egress:
+    # Egress to CockroachDB Dedicated Tier (Port 26257)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.databaseTier.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicies.databaseTier.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.databaseTier.port }}
+    # Egress to VPC Subnet CIDR for CockroachDB AWS Dedicated Endpoints
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicies.vpcEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.databaseTier.port }}
+    # Egress to Kafka MSK Telemetry Tier (Port 9094)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.kafkaTier.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicies.kafkaTier.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.kafkaTier.port }}
+    # Egress to VPC Subnet CIDR for Kafka MSK TLS Brokers
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicies.vpcEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.kafkaTier.port }}
+{{- end }}
+
+---
+# 6. Settlement Gateway NetworkPolicy
+# Protocol integration for SWIFT ISO 20022, FedNow Clearing, ACH NACHA
+{{- if .Values.services.settlementGateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-settlement-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.serviceLabels" (list . "settlement-gateway") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "datavendor-payment-core.selectorLabels" (list . "settlement-gateway") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allowed strictly from edge api gateway
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "edge-api-gateway") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.settlementGateway.service.port }}
+  egress:
+    # Egress to Core Ledger Engine to commit balance updates
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "core-ledger-engine") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.coreLedgerEngine.service.port }}
+    # Egress to Kafka MSK for settlement event emission
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.kafkaTier.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicies.kafkaTier.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.kafkaTier.port }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicies.vpcEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.kafkaTier.port }}
+    # Egress to external financial clearing networks (SWIFT ISO 20022: 8443, FedNow/ACH: 443)
+    - to:
+        {{- range .Values.networkPolicies.settlementEgressCIDRs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443   # FedNow / NACHA TLS
+        - protocol: TCP
+          port: 8443  # SWIFT ISO 20022 mTLS
+{{- end }}
+
+---
+# 7. B2B Metered Billing NetworkPolicy
+# Ingestion consumer from Kafka MSK, writes invoice state to CockroachDB
+{{- if .Values.services.b2bMeteredBilling.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-b2b-metered-billing
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.serviceLabels" (list . "b2b-metered-billing") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "datavendor-payment-core.selectorLabels" (list . "b2b-metered-billing") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allowed strictly from edge gateway for quota/billing queries
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "datavendor-payment-core.selectorLabels" (list . "edge-api-gateway") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.services.b2bMeteredBilling.service.port }}
+  egress:
+    # Egress to Kafka MSK for event consumption
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.kafkaTier.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicies.kafkaTier.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.kafkaTier.port }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicies.vpcEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.kafkaTier.port }}
+    # Egress to CockroachDB for balance & quota tracking
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicies.databaseTier.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicies.databaseTier.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.databaseTier.port }}
+    - to:
+        - ipBlock:
+            cidr: {{ .Values.networkPolicies.vpcEgressCIDR }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.databaseTier.port }}
+{{- end }}
+
+---
+# 8. Tier-0 Database Isolation Policy (CockroachDB Port 26257)
+# Enforces that CockroachDB can ONLY be reached by core-ledger-engine & b2b-metered-billing.
+# Public ingress, edge gateway, and untrusted workloads are strictly blocked.
+{{- if .Values.networkPolicies.databaseTier.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-isolate-cockroachdb
+  namespace: {{ .Values.networkPolicies.databaseTier.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.labels" . | nindent 4 }}
+    security.datavendor.com/policy-tier: "database-isolation"
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.networkPolicies.databaseTier.podSelector | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Permitted exclusively from payment-core namespace workloads:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  {{- range .Values.networkPolicies.databaseTier.allowedComponents }}
+                  - {{ . | quote }}
+                  {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.databaseTier.port }}
+{{- end }}
+
+---
+# 9. Tier-0 Event Streaming Isolation Policy (Kafka Port 9094)
+# Enforces that Kafka brokers can ONLY be reached by core-ledger-engine, settlement-gateway, & b2b-metered-billing.
+# Public ingress and edge gateway are strictly blocked.
+{{- if .Values.networkPolicies.kafkaTier.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-isolate-kafka
+  namespace: {{ .Values.networkPolicies.kafkaTier.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.labels" . | nindent 4 }}
+    security.datavendor.com/policy-tier: "streaming-isolation"
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml .Values.networkPolicies.kafkaTier.podSelector | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Permitted exclusively from payment-core namespace workloads:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Release.Namespace }}
+          podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  {{- range .Values.networkPolicies.kafkaTier.allowedComponents }}
+                  - {{ . | quote }}
+                  {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.networkPolicies.kafkaTier.port }}
+{{- end }}
+{{- end }}

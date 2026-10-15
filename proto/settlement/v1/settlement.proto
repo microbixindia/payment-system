@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package datavendor.settlement.v1;
+
+option go_package = "datavendor-payment-core/proto/settlement/v1;settlementv1";
+
+import "google/protobuf/timestamp.proto";
+
+// SettlementService executes bank clearing pipelines across SWIFT, FedNow, and ACH.
+service SettlementService {
+  rpc ExecuteSettlement (SettlementInstructionRequest) returns (SettlementResponse);
+  rpc IngestBankStatement (BankStatementIngestRequest) returns (StatementIngestResponse);
+}
+
+enum SettlementRail {
+  SETTLEMENT_RAIL_UNSPECIFIED = 0;
+  SETTLEMENT_RAIL_FEDNOW = 1;
+  SETTLEMENT_RAIL_SWIFT_ISO20022 = 2;
+  SETTLEMENT_RAIL_ACH_NACHA = 3;
+}
+
+message SettlementInstructionRequest {
+  string instruction_id = 1;
+  string amount = 2; // NUMERIC string
+  string currency = 3;
+  string urgency = 4; // "INSTANT", "SAME_DAY", "STANDARD"
+  string debtor_name = 5;
+  string debtor_account = 6;
+  string debtor_routing = 7;
+  string creditor_name = 8;
+  string creditor_account = 9;
+  string creditor_routing = 10;
+  string memo = 11;
+}
+
+message SettlementResponse {
+  string instruction_id = 1;
+  SettlementRail selected_rail = 2;
+  string payload_format = 3; // "XML" or "NACHA_ASCII"
+  string clearing_message = 4;
+  string status = 5;
+  google.protobuf.Timestamp dispatched_at = 6;
+}
+
+message BankStatementIngestRequest {
+  string statement_format = 1; // "CAMT053_XML"
+  bytes raw_statement_payload = 2;
+}
+
+message StatementIngestResponse {
+  string statement_id = 1;
+  int32 total_entries_parsed = 2;
+  string status = 3;
+}

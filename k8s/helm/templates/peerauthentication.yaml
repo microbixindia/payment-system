@@ -1,0 +1,13 @@
+{{- if .Values.global.istio.enabled }}
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" . }}-strict-mtls
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.labels" . | nindent 4 }}
+    security.datavendor.com/policy-tier: "mesh-mtls-enforcement"
+spec:
+  mtls:
+    mode: {{ .Values.global.istio.mtlsMode | default "STRICT" }}
+{{- end }}

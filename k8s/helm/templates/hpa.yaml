@@ -1,0 +1,56 @@
+{{- range $key, $service := .Values.services }}
+{{- if and $service.enabled $service.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "datavendor-payment-core.fullname" $ }}-{{ $service.name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "datavendor-payment-core.serviceLabels" (list $ $service.name) | nindent 4 }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "datavendor-payment-core.fullname" $ }}-{{ $service.name }}
+  minReplicas: {{ $service.autoscaling.minReplicas }}
+  maxReplicas: {{ $service.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $service.autoscaling.targetCPUUtilizationPercentage | default 70 }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ $service.autoscaling.targetMemoryUtilizationPercentage | default 80 }}
+  {{- if $service.autoscaling.behavior }}
+  behavior:
+    {{- toYaml $service.autoscaling.behavior | nindent 4 }}
+  {{- else }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 4
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      selectPolicy: Min
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+  {{- end }}
+{{- end }}
+{{- end }}

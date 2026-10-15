@@ -1,0 +1,22 @@
+apiVersion: v2
+name: datavendor-payment-core
+description: Enterprise Helm Chart for DataVendor Payment Core Platform (Edge Gateway, Ledger Engine, Settlement Gateway, B2B Metered Billing)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - payment
+  - fintech
+  - ledger
+  - settlement
+  - zero-trust
+  - istio
+  - cockroachdb
+  - kafka
+maintainers:
+  - name: DataVendor Core Infrastructure & SRE Team
+    email: sre-core-infra@datavendor.internal
+annotations:
+  artifacthub.io/license: Apache-2.0
+  datavendor.com/security-tier: "Tier-0-Mission-Critical"
+  datavendor.com/compliance: "PCI-DSS-v4.0,SOC2-Type-II,ISO27001"

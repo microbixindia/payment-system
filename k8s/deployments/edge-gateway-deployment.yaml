@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-api-gateway
+  namespace: payment-system
+  labels:
+    app: edge-api-gateway
+    tier: network-edge
+spec:
+  replicas: 6
+  selector:
+    matchLabels:
+      app: edge-api-gateway
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 50%
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: edge-api-gateway
+      annotations:
+        sidecar.istio.io/inject: "true"
+    spec:
+      serviceAccountName: edge-api-gateway-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+      - name: gateway
+        image: datavendor.ecr.us-east-1.amazonaws.com/edge-api-gateway:v1.0.0
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+          limits:
+            cpu: "4000m"
+            memory: "8Gi"
+        ports:
+        - containerPort: 8080
+          name: https-edge
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 3
