@@ -1,5 +1,6 @@
 # DataVendor Payment Core (DVPC)
 ### Institutional High-Throughput Financial Operating System & Multi-Rail Clearing Gateway
+description created with AI, rest all independent.
 
 [![Security](https://img.shields.io/badge/Security-256--Bit%20E2EE%20%7C%20Post--Quantum%20Kyber%20%7C%20TLS%201.3-0052CC.svg)](#1-core-cryptography--post-quantum-defense-libscommon-crypto)
 [![Ledger](https://img.shields.io/badge/Ledger-GAAP%2FIFRS%20Double--Entry%20%7C%2050k%20TPS-00875A.svg)](#2-immutable-double-entry-accounting-engine-servicescore-ledger-engine)
